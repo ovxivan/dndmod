@@ -24,6 +24,7 @@ const LATIN_LAYOUT = 'us';
 const LAYOUT_SWITCH_BINDINGS = ['switch-input-source', 'switch-input-source-backward'];
 const SHORTCUT_MODIFIERS = Clutter.ModifierType.SUPER_MASK | Clutter.ModifierType.MOD4_MASK |
     Clutter.ModifierType.CONTROL_MASK;
+const SLEEP_INHIBIT_WHAT = 'sleep:handle-lid-switch:handle-suspend-key:handle-hibernate-key';
 const CODE_FONT_SIZE = 15;
 const CODE_FRAME_SHARE = 0.7;
 const CODE_RAIN_INTENSITY = 0.35;
@@ -437,6 +438,7 @@ export class Mode {
         this._saveState(this._prevBanners);
         this._notifications.set_boolean('show-banners', false);
         this._inhibitIdle();
+        this._inhibitSleep();
         this._forceLatinLayout();
         this._watchCapsLock();
         this._hidePointer();
@@ -482,6 +484,7 @@ export class Mode {
         }
         this._notifications = null;
         this._uninhibitIdle();
+        this._uninhibitSleep();
         this._restoreLayoutSwitch();
         this._restoreLayout();
 
@@ -907,6 +910,51 @@ export class Mode {
             'Uninhibit', new GLib.Variant('(u)', [this._cookie]),
             null, Gio.DBusCallFlags.NONE, -1, null, null);
         this._cookie = 0;
+    }
+
+    /**
+     * Если включено dndmod --nosleep on, запрещает сон через systemd-logind:
+     * закрытие крышки, клавиши сна и «Приостановить» не усыпят компьютер.
+     * Блокировка держится, пока открыт файловый дескриптор от logind, —
+     * при падении GNOME Shell она снимается сама.
+     *
+     * @returns {void}
+     */
+    _inhibitSleep() {
+        if (readConfig('nosleep') !== 'on')
+            return;
+        Gio.DBus.system.call_with_unix_fd_list(
+            'org.freedesktop.login1', '/org/freedesktop/login1', 'org.freedesktop.login1.Manager',
+            'Inhibit', new GLib.Variant('(ssss)', [SLEEP_INHIBIT_WHAT, 'dndmod', 'Включён режим dndmod', 'block']),
+            new GLib.VariantType('(h)'), Gio.DBusCallFlags.NONE, -1, null, null,
+            (conn, res) => {
+                try {
+                    const [result, fdList] = conn.call_with_unix_fd_list_finish(res);
+                    const [index] = result.deepUnpack();
+                    // steal_fds, а не get: get отдаёт копию, а исходный дескриптор
+                    // в fdList держал бы блокировку до сборки мусора.
+                    const fds = fdList.steal_fds();
+                    fds.forEach((fd, i) => i !== index && GLib.close(fd));
+                    this._sleepFd = fds[index];
+                    this._debugLog(`sleep inhibited fd=${this._sleepFd}`);
+                    if (!this._overlay)
+                        this._uninhibitSleep();
+                } catch (e) {
+                    console.warn(`dndmod: sleep inhibit failed: ${e.message}`);
+                }
+            });
+    }
+
+    /**
+     * Снимает запрет сна.
+     *
+     * @returns {void}
+     */
+    _uninhibitSleep() {
+        if (this._sleepFd === undefined || this._sleepFd < 0)
+            return;
+        GLib.close(this._sleepFd);
+        this._sleepFd = -1;
     }
 
     /**

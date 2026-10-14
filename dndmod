@@ -12,6 +12,7 @@
 #   dndmod --palette [FILE]      показать палитру фона (или картинки FILE)
 #   dndmod --hints on|off        показывать подсказку внизу экрана (по умолчанию off)
 #   dndmod --debug on|off        писать диагностику ввода в журнал (по умолчанию off)
+#   dndmod --nosleep on|off      не давать компьютеру уснуть в режиме (по умолчанию off)
 #   dndmod --stop                аварийно выключить (например, из TTY: Ctrl+Alt+F3)
 
 set -eu
@@ -74,8 +75,8 @@ set_flag() {
 }
 
 usage() {
-    echo "Использование: dndmod [--code | -w|--wallpaper FILE | --wallpaper-reset | --palette [FILE] |" >&2
-    echo "                       --hints on|off | --debug on|off | --stop]" >&2
+    echo "Использование: dndmod [--code | --black | -w|--wallpaper FILE | --wallpaper-reset | --palette [FILE] |" >&2
+    echo "                       --hints on|off | --debug on|off | --nosleep on|off | --stop]" >&2
     exit 2
 }
 
@@ -85,7 +86,7 @@ case "${1:-}" in
     -w|--wallpaper)    [[ $# -eq 2 ]] || usage; save_wallpaper "$2"; call Start ;;
     --wallpaper-reset) rm -f "$WALLPAPER_CONF" ;;
     --palette)         [[ $# -le 2 ]] || usage; shift; show_palette "$@" ;;
-    --hints|--debug)   [[ $# -eq 2 ]] || usage; set_flag "${1#--}" "$2" ;;
+    --hints|--debug|--nosleep) [[ $# -eq 2 ]] || usage; set_flag "${1#--}" "$2" ;;
     --stop)            call Stop ;;
     *)                 usage ;;
 esac

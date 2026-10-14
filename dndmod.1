@@ -21,6 +21,8 @@ dndmod \- режим «Не беспокоить» для GNOME с матриц�
 .br
 .B dndmod \-\-debug on\fR|\fBoff
 .br
+.B dndmod \-\-nosleep on\fR|\fBoff
+.br
 .B dndmod \-\-stop
 .SH ОПИСАНИЕ
 .B dndmod
@@ -81,6 +83,12 @@ Enter не нужен.
 Смотреть:
 .B journalctl \-\-user \-b | grep dndmod\-debug
 .TP
+.BR \-\-nosleep " " on | off
+Запрещать сон, пока режим включён (по умолчанию off): закрытие крышки,
+клавиша сна и «Приостановить» в меню не усыпят компьютер. Запрет берётся
+у systemd\-logind и снимается при выходе из режима или падении GNOME Shell.
+Сон по бездействию режим запрещает всегда. Режим не включается.
+.TP
 .B \-\-stop
 Выключить режим без пароля. Аварийный выход, работает и из текстовой консоли.
 .SH ВЫХОД ИЗ РЕЖИМА
@@ -133,11 +141,12 @@ Enter не нужен.
 путь к картинке из
 .BR \-\-wallpaper .
 .TP
-.I ~/.config/dndmod/hints\fR, \fI~/.config/dndmod/debug
+.I ~/.config/dndmod/hints\fR, \fI~/.config/dndmod/debug\fR, \fI~/.config/dndmod/nosleep
 значения
-.B \-\-hints
+.BR \-\-hints ,
+.B \-\-debug
 и
-.BR \-\-debug .
+.BR \-\-nosleep .
 .TP
 .I ~/.local/state/dndmod/show\-banners
 исходное состояние уведомлений, пока режим включён.
@@ -194,4 +203,5 @@ dndmod \-\-wallpaper\-reset
 .SH СМ. ТАКЖЕ
 .BR cmatrix (1),
 .BR gnome\-extensions (1),
+.BR systemd\-inhibit (1),
 .BR unix_chkpwd (8)
