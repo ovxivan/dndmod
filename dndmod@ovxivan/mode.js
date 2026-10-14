@@ -411,14 +411,16 @@ export class Mode {
     /**
      * Включает режим. Повторный вызов игнорируется.
      *
-     * @param {string[]} [options] 'code' — показывать код из сессии Claude
+     * @param {string[]} [options] 'code' — показывать код из сессии Claude,
+     *     'black' — чёрный экран без обоев и анимации
      * @returns {void}
      */
     start(options = []) {
         if (this._overlay)
             return;
 
-        this._buildOverlay();
+        const black = options.includes('black');
+        this._buildOverlay(black);
         this._grab = Main.pushModal(this._overlay, {actionMode: Shell.ActionMode.LOCK_SCREEN});
         if ((this._grab.get_seat_state() & Clutter.GrabState.KEYBOARD) === 0) {
             this.stop();
@@ -435,11 +437,13 @@ export class Mode {
         this._watchCapsLock();
         this._debugLog(`start options=${JSON.stringify(options)} source=${currentSourceId()}`);
 
-        this._timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FRAME_MS, () => {
-            this._rain.tick();
-            this._typer?.tick();
-            return GLib.SOURCE_CONTINUE;
-        });
+        if (!black) {
+            this._timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FRAME_MS, () => {
+                this._rain.tick();
+                this._typer?.tick();
+                return GLib.SOURCE_CONTINUE;
+            });
+        }
 
         if (options.includes('code'))
             this._startCode().catch(e => console.error(`dndmod: code: ${e.message}\n${e.stack}`));
@@ -484,11 +488,14 @@ export class Mode {
     }
 
     /**
-     * Чёрный слой поверх всего: матрица и подсказка внизу основного монитора.
+     * Чёрный слой поверх всего: обои, матрица и подсказка внизу основного монитора.
+     * В чёрном режиме обоев и матрицы нет; подсказка и Caps Lock — как обычно,
+     * по умолчанию не видны.
      *
+     * @param {boolean} black только чёрный экран
      * @returns {void}
      */
-    _buildOverlay() {
+    _buildOverlay(black) {
         this._buffer = '';
         this._checking = false;
         this._overlay = new St.Widget({
@@ -501,20 +508,22 @@ export class Mode {
             coordinate: Clutter.BindCoordinate.ALL,
         }));
 
-        const wallpaper = currentWallpaperUri();
-        if (wallpaper) {
-            for (const monitor of Main.layoutManager.monitors)
-                this._overlay.add_child(this._buildWallpaper(monitor, wallpaper));
-        }
-
-        const area = new St.DrawingArea();
-        area.add_constraint(new Clutter.BindConstraint({
-            source: this._overlay,
-            coordinate: Clutter.BindCoordinate.SIZE,
-        }));
-        this._overlay.add_child(area);
+        const wallpaper = black ? null : currentWallpaperUri();
         this._palette = paletteFromImage(wallpaper);
-        this._rain = new MatrixRain(area, this._palette);
+        if (!black) {
+            if (wallpaper) {
+                for (const monitor of Main.layoutManager.monitors)
+                    this._overlay.add_child(this._buildWallpaper(monitor, wallpaper));
+            }
+
+            const area = new St.DrawingArea();
+            area.add_constraint(new Clutter.BindConstraint({
+                source: this._overlay,
+                coordinate: Clutter.BindCoordinate.SIZE,
+            }));
+            this._overlay.add_child(area);
+            this._rain = new MatrixRain(area, this._palette);
+        }
         this._debug = readConfig('debug') === 'on';
         this._hint = this._buildHint(this._palette[0]);
         this._overlay.add_child(this._hint);

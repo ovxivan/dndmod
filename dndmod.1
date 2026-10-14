@@ -6,6 +6,8 @@ dndmod \- режим «Не беспокоить» для GNOME с матриц�
 .br
 .B dndmod \-\-code
 .br
+.B dndmod \-\-black
+.br
 .B dndmod
 .BR \-w | \-\-wallpaper
 .I FILE
@@ -45,6 +47,11 @@ Enter не нужен.
 Нет активной сессии \(em обычная матрица.
 Файлы .env*, *.pem, *.key, id_rsa*, credentials* не показываются,
 значения api_key, secret, token, password маскируются.
+.TP
+.B \-\-black
+Включить режим с чёрным экраном: без обоев, матрицы и подсказки, анимация
+не запускается. Выход \(em тот же ввод пароля; надпись «Caps Lock»
+появляется, только если он включён, подсказку показывает F1.
 .TP
 .BR \-w ", " \-\-wallpaper " " \fIFILE\fR
 Запомнить картинку
@@ -153,7 +160,7 @@ claude.js (код из сессии Claude), palette\-cli.js (вывод для 
 .TP
 .B 1
 файл не найден или не является изображением; ошибка D\-Bus;
-для \-\-code \(em расширение старой версии, нужен перезаход в сессию.
+для \-\-code и \-\-black \(em расширение старой версии, нужен перезаход в сессию.
 .TP
 .B 2
 неверные параметры.
@@ -178,6 +185,7 @@ bash \-c 'read \-rsp "Пароль: " p; echo; printf "%s\e0" "$p" |
 .SH ПРИМЕРЫ
 .nf
 dndmod \-\-code
+dndmod \-\-black
 dndmod \-w ~/Pictures/bg.jpg
 dndmod \-\-palette ~/Pictures/other.png
 dndmod \-\-wallpaper\-reset

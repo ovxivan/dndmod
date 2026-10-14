@@ -46,6 +46,7 @@ man dndmod
 ```bash
 dndmod                          # включить режим
 dndmod --code                   # режим с набором кода из активной сессии Claude Code
+dndmod --black                  # чёрный экран без обоев, анимации и надписей
 dndmod -w ~/Pictures/bg.jpg     # запомнить картинку фона и включить режим
 dndmod --wallpaper-reset        # фоном снова будут обои рабочего стола
 dndmod --palette                # показать палитру текущего фона
