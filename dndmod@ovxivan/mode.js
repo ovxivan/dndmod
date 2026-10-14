@@ -17,7 +17,7 @@ const FONT = 'Noto Sans Mono CJK JP';
 const FONT_SIZE = 18;
 const FRAME_MS = 50;
 const WALLPAPER_DIM = 0.55;
-const INPUT_RESET_SEC = 30;
+const INPUT_RESET_US = 2 * GLib.USEC_PER_SEC;
 const IDLE_INHIBIT_FLAG = 8;
 const LATIN_LAYOUT = 'us';
 const STATE_FILE = GLib.build_filenamev([GLib.get_user_state_dir(), 'dndmod', 'show-banners']);
@@ -231,9 +231,7 @@ export class Mode {
 
         if (this._timer)
             GLib.source_remove(this._timer);
-        if (this._resetTimer)
-            GLib.source_remove(this._resetTimer);
-        this._timer = this._resetTimer = 0;
+        this._timer = 0;
         this._buffer = '';
 
         if (this._grab)
@@ -342,11 +340,19 @@ export class Mode {
     /**
      * Невидимый ввод пароля: символы копятся в буфере и проверяются
      * после каждого нажатия. Backspace — удалить символ, Escape — очистить.
+     * Если с прошлого нажатия прошло больше INPUT_RESET_US, набранное
+     * сбрасывается: время сравнивается напрямую, без таймера, который
+     * в GLib срабатывает с опозданием до секунды.
      *
      * @param {Clutter.Event} event
      * @returns {boolean}
      */
     _onKey(event) {
+        const now = GLib.get_monotonic_time();
+        if (now - (this._lastKeyAt ?? 0) > INPUT_RESET_US)
+            this._buffer = '';
+        this._lastKeyAt = now;
+
         switch (event.get_key_symbol()) {
         case Clutter.KEY_BackSpace:
             this._buffer = this._buffer.slice(0, -1);
@@ -361,24 +367,8 @@ export class Mode {
             this._buffer += ch;
         }
         }
-        this._scheduleReset();
         this._verify();
         return Clutter.EVENT_STOP;
-    }
-
-    /**
-     * Очищает недописанный пароль после бездействия.
-     *
-     * @returns {void}
-     */
-    _scheduleReset() {
-        if (this._resetTimer)
-            GLib.source_remove(this._resetTimer);
-        this._resetTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, INPUT_RESET_SEC, () => {
-            this._resetTimer = 0;
-            this._buffer = '';
-            return GLib.SOURCE_REMOVE;
-        });
     }
 
     /**
