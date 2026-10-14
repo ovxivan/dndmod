@@ -41,5 +41,5 @@ gsettings set "$entry" command "$TARGET"
 gsettings set "$entry" binding "$BINDING"
 
 echo "Установлено: $TARGET, расширение $UUID, хоткей $BINDING"
-echo "Изменения mode.js/palette.js подхватятся при следующем запуске dndmod."
+echo "Изменения модулей подхватятся при следующем запуске dndmod."
 echo "Перезаход в сессию нужен только при первой установке и правке extension.js."
