@@ -2,6 +2,7 @@ import Cairo from 'cairo';
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 import St from 'gi://St';
 
@@ -435,6 +436,7 @@ export class Mode {
         this._inhibitIdle();
         this._forceLatinLayout();
         this._watchCapsLock();
+        this._hidePointer();
         this._debugLog(`start options=${JSON.stringify(options)} source=${currentSourceId()}`);
 
         if (!black) {
@@ -478,6 +480,7 @@ export class Mode {
         this._uninhibitIdle();
         this._restoreLayout();
 
+        this._restorePointer();
         if (this._capsSignal)
             this._keymap.disconnect(this._capsSignal);
         this._capsSignal = 0;
@@ -745,6 +748,37 @@ export class Mode {
         } catch (e) {
             console.warn(`dndmod: save state failed: ${e.message}`);
         }
+    }
+
+    /**
+     * Прячет указатель мыши, как экран блокировки GNOME. Mutter снова
+     * показывает указатель при движении мыши, поэтому он прячется повторно
+     * на каждый visibility-changed, пока режим включён.
+     *
+     * @returns {void}
+     */
+    _hidePointer() {
+        this._cursorTracker = Meta.CursorTracker.get_for_display(global.display);
+        this._pointerWasVisible = this._cursorTracker.get_pointer_visible();
+        this._pointerSignal = this._cursorTracker.connect('visibility-changed', tracker => {
+            if (tracker.get_pointer_visible())
+                tracker.set_pointer_visible(false);
+        });
+        this._cursorTracker.set_pointer_visible(false);
+    }
+
+    /**
+     * Возвращает указателю прежнюю видимость.
+     *
+     * @returns {void}
+     */
+    _restorePointer() {
+        if (!this._cursorTracker)
+            return;
+        this._cursorTracker.disconnect(this._pointerSignal);
+        this._cursorTracker.set_pointer_visible(this._pointerWasVisible ?? true);
+        this._cursorTracker = null;
+        this._pointerSignal = 0;
     }
 
     /**
