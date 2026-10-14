@@ -10,6 +10,7 @@ import * as Keyboard from 'resource:///org/gnome/shell/ui/status/keyboard.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 
 import {currentWallpaperUri, paletteFromImage, pickColor, tint} from './palette.js';
+import {typingSteps} from './typing.js';
 
 Gio._promisify(Gio.Subprocess.prototype, 'communicate_async');
 
@@ -31,6 +32,7 @@ const CODE_RAIN_INTENSITY = 0.35;
 const CODE_POLL_SEC = 2;
 const CODE_PAUSE_MS = 1500;
 const CODE_REPLAY_MS = 20000;
+const CODE_CURSOR_SOLID_MS = 500;
 const COMMENT_LINE = /^\s*(\/\/|#|\*|\/\*|--|;)/;
 const CONFIG_DIR = GLib.build_filenamev([GLib.get_user_config_dir(), 'dndmod']);
 const STATE_FILE = GLib.build_filenamev([GLib.get_user_state_dir(), 'dndmod', 'show-banners']);
@@ -151,7 +153,8 @@ class MatrixRain {
 }
 
 /**
- * Окно с кодом из сессии Claude, который «набирается» посимвольно.
+ * Окно с кодом из сессии Claude, который «набирается» как человеком:
+ * ритм нажатий, паузы и опечатки задаёт typing.js.
  * Свежий код (live) прерывает набор истории на конце строки.
  */
 class CodeTyper {
@@ -169,10 +172,12 @@ class CodeTyper {
         this._current = null;
         this._file = '';
         this._lines = [''];
-        this._pos = 0;
+        this._steps = null;
+        this._wait = 0;
         this._pause = 0;
         this._idle = 0;
         this._frame = 0;
+        this._sinceKey = Infinity;
         this._interrupt = false;
         area.connect('repaint', a => this._paint(a));
     }
@@ -200,12 +205,14 @@ class CodeTyper {
     }
 
     /**
-     * Один кадр: печатает несколько символов или выдерживает паузу.
+     * Один кадр: выполняет шаги набора, время которых подошло,
+     * или выдерживает паузу между фрагментами.
      *
      * @returns {void}
      */
     tick() {
         this._frame++;
+        this._sinceKey += FRAME_MS;
         if (this._pause > 0)
             this._pause -= FRAME_MS;
         else if (this._current)
@@ -232,38 +239,56 @@ class CodeTyper {
         this._current = this._queue.shift();
         this._file = this._current.file;
         this._lines = [''];
-        this._pos = 0;
+        this._steps = typingSteps(this._current.code);
+        this._wait = 0;
     }
 
     /**
-     * Печатает 1–4 символа; отступ новой строки — сразу, как автоотступ редактора.
+     * Выполняет шаги набора, чьё время подошло за этот кадр. Свежий код
+     * прерывает историю на переводе строки — строка остаётся дописанной.
      *
      * @returns {void}
      */
     _type() {
-        const code = this._current.code;
-        let count = 1 + Math.floor(Math.random() * 4);
-        while (count-- > 0 && this._pos < code.length) {
-            const ch = code[this._pos++];
-            if (ch !== '\n') {
-                this._lines[this._lines.length - 1] += ch;
-                continue;
+        this._wait -= FRAME_MS;
+        while (this._wait <= 0) {
+            if (!this._pendingStep) {
+                const {value, done} = this._steps.next();
+                if (done) {
+                    this._finish(CODE_PAUSE_MS);
+                    return;
+                }
+                this._pendingStep = value;
+                this._wait += value.delay;
+                if (this._wait > 0)
+                    return;
             }
-            if (this._interrupt) {
+            const step = this._pendingStep;
+            this._pendingStep = null;
+            if (step.op === 'newline' && this._interrupt) {
                 this._finish(600);
                 return;
             }
-            let indent = '';
-            while (code[this._pos] === ' ')
-                indent += code[this._pos++];
-            this._lines.push(indent);
-            if (Math.random() < 0.15) {
-                this._pause = 150 + Math.random() * 450;
-                break;
-            }
+            this._apply(step);
         }
-        if (this._pos >= code.length)
-            this._finish(CODE_PAUSE_MS);
+    }
+
+    /**
+     * Применяет шаг набора к строкам на экране.
+     *
+     * @param {import('./typing.js').TypingStep} step
+     * @returns {void}
+     */
+    _apply(step) {
+        const last = this._lines.length - 1;
+        if (step.op === 'char')
+            this._lines[last] += step.ch;
+        else if (step.op === 'back')
+            this._lines[last] = this._lines[last].slice(0, -1);
+        else if (step.op === 'newline')
+            this._lines.push(step.indent);
+        if (step.op !== 'pause')
+            this._sinceKey = 0;
     }
 
     /**
@@ -274,6 +299,8 @@ class CodeTyper {
      */
     _finish(pauseMs) {
         this._current = null;
+        this._steps = null;
+        this._pendingStep = null;
         this._interrupt = false;
         this._pause = pauseMs;
     }
@@ -322,7 +349,7 @@ class CodeTyper {
             cr.showText(line);
         }
 
-        const typing = this._current && this._pause <= 0;
+        const typing = this._sinceKey < CODE_CURSOR_SOLID_MS;
         if (typing || this._frame % 20 < 10) {
             const last = this._lines[this._lines.length - 1];
             const x = pad + (last ? cr.textExtents(last).xAdvance : 0);
