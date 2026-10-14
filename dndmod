@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# dndmod — режим «Не беспокоить» для GNOME (Ubuntu 24.04).
+# Управляет расширением dndmod@ovxivan: матрица на весь экран,
+# системные сочетания клавиш заблокированы, выход только по паролю.
+#
+# Использование:
+#   dndmod                       включить режим
+#   dndmod -w, --wallpaper FILE  запомнить картинку фона и включить режим
+#   dndmod --wallpaper-reset     вернуть обои рабочего стола как фон
+#   dndmod --palette [FILE]      показать палитру фона (или картинки FILE)
+#   dndmod --stop                аварийно выключить (например, из TTY: Ctrl+Alt+F3)
+
+set -eu
+
+readonly DEST="org.gnome.Shell"
+readonly OBJ="/org/gnome/Shell/Extensions/Dndmod"
+readonly IFACE="org.gnome.Shell.Extensions.Dndmod"
+readonly EXT_DIR="$HOME/.local/share/gnome-shell/extensions/dndmod@ovxivan"
+readonly WALLPAPER_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/dndmod/wallpaper"
+
+# Из TTY сессионная шина не задана — берём шину пользователя.
+export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
+
+# Вызывает метод расширения через D-Bus.
+call() {
+    gdbus call --session --dest "$DEST" --object-path "$OBJ" --method "$IFACE.$1" >/dev/null
+}
+
+# Проверяет, что файл существует и это изображение; печатает абсолютный путь.
+image_path() {
+    local file
+    file=$(realpath -e -- "$1" 2>/dev/null) || { echo "Файл не найден: $1" >&2; return 1; }
+    [[ $(file -b --mime-type -- "$file") == image/* ]] || { echo "Не изображение: $file" >&2; return 1; }
+    printf '%s\n' "$file"
+}
+
+# Сохраняет абсолютный путь к картинке фона.
+save_wallpaper() {
+    local file
+    file=$(image_path "$1") || exit 1
+    mkdir -p "$(dirname "$WALLPAPER_CONF")"
+    printf '%s\n' "$file" > "$WALLPAPER_CONF"
+}
+
+# Печатает палитру через gjs, тем же кодом, что использует режим.
+show_palette() {
+    local file
+    if [[ $# -eq 0 ]]; then
+        gjs -m "$EXT_DIR/palette-cli.js"
+    else
+        file=$(image_path "$1") || exit 1
+        gjs -m "$EXT_DIR/palette-cli.js" "$file"
+    fi
+}
+
+usage() {
+    echo "Использование: dndmod [-w|--wallpaper FILE | --wallpaper-reset | --palette [FILE] | --stop]" >&2
+    exit 2
+}
+
+case "${1:-}" in
+    "")                call Start ;;
+    -w|--wallpaper)    [[ $# -eq 2 ]] || usage; save_wallpaper "$2"; call Start ;;
+    --wallpaper-reset) rm -f "$WALLPAPER_CONF" ;;
+    --palette)         [[ $# -le 2 ]] || usage; shift; show_palette "$@" ;;
+    --stop)            call Stop ;;
+    *)                 usage ;;
+esac

@@ -1,0 +1,7 @@
+{
+  "uuid": "dndmod@ovxivan",
+  "name": "dndmod",
+  "description": "Режим «Не беспокоить»: матрица на весь экран, выход по невидимому вводу пароля.",
+  "shell-version": ["46"],
+  "version": 1
+}
