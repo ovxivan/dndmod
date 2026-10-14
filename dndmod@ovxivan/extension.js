@@ -14,11 +14,13 @@ const DBUS_XML = `
 <node>
   <interface name="org.gnome.Shell.Extensions.Dndmod">
     <method name="Start"/>
+    <method name="StartWithOptions">
+      <arg type="as" direction="in" name="options"/>
+    </method>
     <method name="Stop"/>
   </interface>
 </node>`;
 
-const MODULES = ['mode.js', 'palette.js'];
 const COPIES_DIR = GLib.build_filenamev([GLib.get_user_runtime_dir(), 'dndmod']);
 
 export default class DndmodExtension extends Extension {
@@ -43,7 +45,17 @@ export default class DndmodExtension extends Extension {
      * @returns {void}
      */
     Start() {
-        this._start().catch(e => this._fail(e));
+        this._start([]).catch(e => this._fail(e));
+    }
+
+    /**
+     * D-Bus: включает режим с параметрами, например ['code'].
+     *
+     * @param {string[]} options
+     * @returns {void}
+     */
+    StartWithOptions(options) {
+        this._start(options).catch(e => this._fail(e));
     }
 
     /**
@@ -56,16 +68,17 @@ export default class DndmodExtension extends Extension {
     }
 
     /**
+     * @param {string[]} options
      * @returns {Promise<void>}
      */
-    async _start() {
+    async _start(options) {
         if (this._mode?.active)
             return;
         const module = await this._load();
         if (!this._dbus || this._mode?.active)
             return;
         this._mode = new module.Mode();
-        this._mode.start();
+        this._mode.start(options);
     }
 
     /**
@@ -80,7 +93,7 @@ export default class DndmodExtension extends Extension {
 
         const dir = GLib.build_filenamev([COPIES_DIR, stamp]);
         GLib.mkdir_with_parents(dir, 0o700);
-        for (const name of MODULES) {
+        for (const name of this._modules()) {
             this.dir.get_child(name).copy(
                 Gio.File.new_for_path(GLib.build_filenamev([dir, name])),
                 Gio.FileCopyFlags.OVERWRITE, null, null);
@@ -94,12 +107,27 @@ export default class DndmodExtension extends Extension {
     }
 
     /**
+     * Все модули расширения, кроме самого загрузчика, в стабильном порядке.
+     *
+     * @returns {string[]}
+     */
+    _modules() {
+        const names = [];
+        for (const info of this.dir.enumerate_children('standard::name', Gio.FileQueryInfoFlags.NONE, null)) {
+            const name = info.get_name();
+            if (name.endsWith('.js') && name !== 'extension.js')
+                names.push(name);
+        }
+        return names.sort();
+    }
+
+    /**
      * Метка версии: время изменения всех модулей с точностью до микросекунд.
      *
      * @returns {string}
      */
     _sourceStamp() {
-        return MODULES.map(name => {
+        return this._modules().map(name => {
             const info = this.dir.get_child(name).query_info(
                 'time::modified,time::modified-usec', Gio.FileQueryInfoFlags.NONE, null);
             return `${info.get_attribute_uint64('time::modified')}` +

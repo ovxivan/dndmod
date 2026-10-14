@@ -20,6 +20,13 @@ const WALLPAPER_DIM = 0.55;
 const INPUT_RESET_US = 2 * GLib.USEC_PER_SEC;
 const IDLE_INHIBIT_FLAG = 8;
 const LATIN_LAYOUT = 'us';
+const CODE_FONT_SIZE = 15;
+const CODE_FRAME_SHARE = 0.7;
+const CODE_RAIN_INTENSITY = 0.35;
+const CODE_POLL_SEC = 2;
+const CODE_PAUSE_MS = 1500;
+const CODE_REPLAY_MS = 20000;
+const COMMENT_LINE = /^\s*(\/\/|#|\*|\/\*|--|;)/;
 const STATE_FILE = GLib.build_filenamev([GLib.get_user_state_dir(), 'dndmod', 'show-banners']);
 const HINT = 'Выход — пароль.  Аварийно: Ctrl+Alt+F3 → войти → dndmod --stop → Ctrl+Alt+F2';
 const GLYPHS = Array.from('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%&*+-=<>' +
@@ -45,6 +52,7 @@ class MatrixRain {
     constructor(area, palette) {
         this._area = area;
         this._palette = palette;
+        this.intensity = 1;
         this._cols = [];
         this._grid = [];
         this._cellW = Math.ceil(FONT_SIZE * 0.6);
@@ -127,10 +135,195 @@ class MatrixRain {
                 if (row < 0 || row >= this._rows || !ch)
                     continue;
                 const {r, g, b} = k === 0 ? drop.head : drop.color;
-                cr.setSourceRGBA(r, g, b, k === 0 ? 1 : 1 - k / drop.len);
+                cr.setSourceRGBA(r, g, b, (k === 0 ? 1 : 1 - k / drop.len) * this.intensity);
                 cr.moveTo(i * this._cellW, (row + 1) * this._cellH);
                 cr.showText(ch);
             }
+        }
+        cr.$dispose();
+    }
+}
+
+/**
+ * Окно с кодом из сессии Claude, который «набирается» посимвольно.
+ * Свежий код (live) прерывает набор истории на конце строки.
+ */
+class CodeTyper {
+    /**
+     * @param {St.DrawingArea} area холст окна
+     * @param {import('./palette.js').PaletteColor} color цвет текста
+     * @param {string} title имя сессии в заголовке
+     */
+    constructor(area, color, title) {
+        this._area = area;
+        this._color = color;
+        this._title = title;
+        this._history = [];
+        this._queue = [];
+        this._current = null;
+        this._file = '';
+        this._lines = [''];
+        this._pos = 0;
+        this._pause = 0;
+        this._idle = 0;
+        this._frame = 0;
+        this._interrupt = false;
+        area.connect('repaint', a => this._paint(a));
+    }
+
+    /**
+     * Добавляет фрагменты в очередь набора.
+     *
+     * @param {import('./claude.js').Snippet[]} snippets
+     * @param {boolean} live свежий код: в начало очереди, прервать историю
+     * @returns {void}
+     */
+    push(snippets, live) {
+        if (!snippets.length)
+            return;
+        const marked = snippets.map(s => ({...s, live}));
+        this._history.push(...snippets);
+        if (live) {
+            this._queue = this._queue.filter(s => s.live);
+            this._queue.push(...marked);
+            if (this._current && !this._current.live)
+                this._interrupt = true;
+        } else {
+            this._queue.push(...marked);
+        }
+    }
+
+    /**
+     * Один кадр: печатает несколько символов или выдерживает паузу.
+     *
+     * @returns {void}
+     */
+    tick() {
+        this._frame++;
+        if (this._pause > 0)
+            this._pause -= FRAME_MS;
+        else if (this._current)
+            this._type();
+        else
+            this._next();
+        this._area.queue_repaint();
+    }
+
+    /**
+     * Берёт следующий фрагмент; если очередь пуста дольше CODE_REPLAY_MS —
+     * начинает историю заново.
+     *
+     * @returns {void}
+     */
+    _next() {
+        if (!this._queue.length) {
+            this._idle += FRAME_MS;
+            if (this._idle < CODE_REPLAY_MS || !this._history.length)
+                return;
+            this._queue = this._history.map(s => ({...s, live: false}));
+        }
+        this._idle = 0;
+        this._current = this._queue.shift();
+        this._file = this._current.file;
+        this._lines = [''];
+        this._pos = 0;
+    }
+
+    /**
+     * Печатает 1–4 символа; отступ новой строки — сразу, как автоотступ редактора.
+     *
+     * @returns {void}
+     */
+    _type() {
+        const code = this._current.code;
+        let count = 1 + Math.floor(Math.random() * 4);
+        while (count-- > 0 && this._pos < code.length) {
+            const ch = code[this._pos++];
+            if (ch !== '\n') {
+                this._lines[this._lines.length - 1] += ch;
+                continue;
+            }
+            if (this._interrupt) {
+                this._finish(600);
+                return;
+            }
+            let indent = '';
+            while (code[this._pos] === ' ')
+                indent += code[this._pos++];
+            this._lines.push(indent);
+            if (Math.random() < 0.15) {
+                this._pause = 150 + Math.random() * 450;
+                break;
+            }
+        }
+        if (this._pos >= code.length)
+            this._finish(CODE_PAUSE_MS);
+    }
+
+    /**
+     * Завершает фрагмент: текст остаётся на экране до начала следующего.
+     *
+     * @param {number} pauseMs
+     * @returns {void}
+     */
+    _finish(pauseMs) {
+        this._current = null;
+        this._interrupt = false;
+        this._pause = pauseMs;
+    }
+
+    /**
+     * Рисует окно: заголовок с сессией и файлом, последние строки кода, курсор.
+     *
+     * @param {St.DrawingArea} area
+     * @returns {void}
+     */
+    _paint(area) {
+        const cr = area.get_context();
+        const [w, h] = area.get_surface_size();
+        const {r, g, b} = this._color;
+        const pad = 18;
+        const lineH = Math.ceil(CODE_FONT_SIZE * 1.4);
+
+        cr.setSourceRGBA(0, 0, 0, 0.78);
+        cr.paint();
+        cr.setSourceRGBA(r, g, b, 0.5);
+        cr.setLineWidth(1);
+        cr.rectangle(0.5, 0.5, w - 1, h - 1);
+        cr.stroke();
+
+        cr.selectFontFace(FONT, Cairo.FontSlant.NORMAL, Cairo.FontWeight.NORMAL);
+        cr.setFontSize(CODE_FONT_SIZE);
+        let header = this._file ? `${this._title} · ${this._file}` : `${this._title} · ожидание кода…`;
+        while (header.length > 1 && cr.textExtents(header).xAdvance > w - pad * 2)
+            header = `…${header.slice(2)}`;
+        cr.setSourceRGBA(r, g, b, 0.55);
+        cr.moveTo(pad, pad + CODE_FONT_SIZE);
+        cr.showText(header);
+        const top = pad + lineH + 8;
+        cr.rectangle(pad, top - 6, w - pad * 2, 1);
+        cr.fill();
+
+        const rows = Math.max(1, Math.floor((h - top - pad) / lineH));
+        const first = Math.max(0, this._lines.length - rows);
+        let y = top;
+        for (const line of this._lines.slice(first)) {
+            y += lineH;
+            if (!line)
+                continue;
+            cr.setSourceRGBA(r, g, b, COMMENT_LINE.test(line) ? 0.55 : 0.95);
+            cr.moveTo(pad, y - lineH * 0.25);
+            cr.showText(line);
+        }
+
+        const typing = this._current && this._pause <= 0;
+        if (typing || this._frame % 20 < 10) {
+            const last = this._lines[this._lines.length - 1];
+            const x = pad + (last ? cr.textExtents(last).xAdvance : 0);
+            const cursor = tint(this._color, 0.6);
+            cr.setSourceRGBA(cursor.r, cursor.g, cursor.b, 0.9);
+            cr.rectangle(x + 1, y - lineH * 0.95, CODE_FONT_SIZE * 0.55, lineH * 0.85);
+            cr.fill();
         }
         cr.$dispose();
     }
@@ -193,9 +386,10 @@ export class Mode {
     /**
      * Включает режим. Повторный вызов игнорируется.
      *
+     * @param {string[]} [options] 'code' — показывать код из сессии Claude
      * @returns {void}
      */
-    start() {
+    start(options = []) {
         if (this._overlay)
             return;
 
@@ -216,8 +410,12 @@ export class Mode {
 
         this._timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FRAME_MS, () => {
             this._rain.tick();
+            this._typer?.tick();
             return GLib.SOURCE_CONTINUE;
         });
+
+        if (options.includes('code'))
+            this._startCode().catch(e => console.error(`dndmod: code: ${e.message}\n${e.stack}`));
     }
 
     /**
@@ -231,7 +429,10 @@ export class Mode {
 
         if (this._timer)
             GLib.source_remove(this._timer);
-        this._timer = 0;
+        if (this._codePoll)
+            GLib.source_remove(this._codePoll);
+        this._timer = this._codePoll = 0;
+        this._typer = null;
         this._buffer = '';
 
         if (this._grab)
@@ -280,15 +481,59 @@ export class Mode {
             coordinate: Clutter.BindCoordinate.SIZE,
         }));
         this._overlay.add_child(area);
-        const palette = paletteFromImage(wallpaper);
-        this._rain = new MatrixRain(area, palette);
-        this._overlay.add_child(this._buildHint(palette[0]));
+        this._palette = paletteFromImage(wallpaper);
+        this._rain = new MatrixRain(area, this._palette);
+        this._hint = this._buildHint(this._palette[0]);
+        this._overlay.add_child(this._hint);
 
         this._overlay.connect('key-press-event', (_a, event) => this._onKey(event));
 
         Main.uiGroup.add_child(this._overlay);
         Main.uiGroup.set_child_above_sibling(this._overlay, null);
         this._overlay.grab_key_focus();
+    }
+
+    /**
+     * Окно набора кода по центру основного монитора поверх приглушённой матрицы.
+     * Сначала набирается история сессии, затем каждые CODE_POLL_SEC
+     * подхватывается свежий код. Модуль claude.js грузится только здесь.
+     *
+     * @returns {Promise<void>}
+     */
+    async _startCode() {
+        const claude = await import('./claude.js');
+        if (!this._overlay)
+            return;
+        const session = claude.activeSession();
+        if (!session) {
+            console.log('dndmod: нет активной сессии Claude, показываю только матрицу');
+            return;
+        }
+
+        const reader = new claude.TranscriptReader(session);
+        const monitor = Main.layoutManager.primaryMonitor;
+        const width = Math.round(monitor.width * CODE_FRAME_SHARE);
+        const height = Math.round(monitor.height * CODE_FRAME_SHARE);
+        const area = new St.DrawingArea({
+            x: monitor.x + Math.round((monitor.width - width) / 2),
+            y: monitor.y + Math.round((monitor.height - height) / 2),
+            width,
+            height,
+        });
+        this._overlay.insert_child_below(area, this._hint);
+
+        this._typer = new CodeTyper(area, this._palette[0], session.name);
+        this._typer.push(reader.readNew(), false);
+        this._rain.intensity = CODE_RAIN_INTENSITY;
+
+        this._codePoll = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, CODE_POLL_SEC, () => {
+            try {
+                this._typer?.push(reader.readNew(), true);
+            } catch (e) {
+                console.warn(`dndmod: code poll: ${e.message}`);
+            }
+            return GLib.SOURCE_CONTINUE;
+        });
     }
 
     /**

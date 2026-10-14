@@ -30,7 +30,7 @@ append_unique() {
 
 install -Dm755 "$SRC/dndmod" "$TARGET"
 install -Dm644 "$SRC/dndmod.1" "$HOME/.local/share/man/man1/dndmod.1"
-install -Dm644 -t "$EXT_DIR" "$SRC/$UUID/metadata.json" "$SRC/$UUID/extension.js" "$SRC/$UUID/mode.js" "$SRC/$UUID/palette.js" "$SRC/$UUID/palette-cli.js"
+install -Dm644 -t "$EXT_DIR" "$SRC/$UUID/metadata.json" "$SRC/$UUID/extension.js" "$SRC/$UUID/mode.js" "$SRC/$UUID/palette.js" "$SRC/$UUID/palette-cli.js" "$SRC/$UUID/claude.js"
 
 append_unique org.gnome.shell enabled-extensions "$UUID"
 

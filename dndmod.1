@@ -4,6 +4,8 @@ dndmod \- режим «Не беспокоить» для GNOME с матриц�
 .SH СИНТАКСИС
 .B dndmod
 .br
+.B dndmod \-\-code
+.br
 .B dndmod
 .BR \-w | \-\-wallpaper
 .I FILE
@@ -30,6 +32,15 @@ Enter не нужен.
 .TP
 без параметров
 Включить режим. То же делает сочетание клавиш (по умолчанию Super+Shift+M).
+.TP
+.B \-\-code
+Включить режим с окном, где посимвольно набирается код, написанный Claude
+в активной сессии Claude Code (вызовы Write, Edit, MultiEdit).
+Сначала набирается история сессии, затем каждые 2 секунды подхватывается
+свежий код и показывается без очереди.
+Нет активной сессии \(em обычная матрица.
+Файлы .env*, *.pem, *.key, id_rsa*, credentials* не показываются,
+значения api_key, secret, token, password маскируются.
 .TP
 .BR \-w ", " \-\-wallpaper " " \fIFILE\fR
 Запомнить картинку
@@ -100,18 +111,23 @@ Enter не нужен.
 .TP
 .I ~/.local/share/gnome\-shell/extensions/dndmod@ovxivan/
 расширение: extension.js (загрузчик), mode.js (режим), palette.js (палитра),
-palette\-cli.js (вывод для \-\-palette).
+claude.js (код из сессии Claude), palette\-cli.js (вывод для \-\-palette).
 .TP
 .I $XDG_RUNTIME_DIR/dndmod/
-копии mode.js и palette.js: изменения в них подхватываются
+копии модулей расширения: изменения в них подхватываются
 при следующем запуске без перезахода в сессию.
+.TP
+.I ~/.claude/sessions/*.json, ~/.claude/projects/*/*.jsonl
+активные сессии Claude Code и их история \(em источник кода для \-\-code
+(внутренний формат Claude Code).
 .SH КОД ВОЗВРАТА
 .TP
 .B 0
 успех.
 .TP
 .B 1
-файл не найден или не является изображением; ошибка D\-Bus.
+файл не найден или не является изображением; ошибка D\-Bus;
+для \-\-code \(em расширение старой версии, нужен перезаход в сессию.
 .TP
 .B 2
 неверные параметры.
@@ -135,6 +151,7 @@ bash \-c 'read \-rsp "Пароль: " p; echo; printf "%s\e0" "$p" |
 Изменение extension.js требует перезахода в сессию.
 .SH ПРИМЕРЫ
 .nf
+dndmod \-\-code
 dndmod \-w ~/Pictures/bg.jpg
 dndmod \-\-palette ~/Pictures/other.png
 dndmod \-\-wallpaper\-reset

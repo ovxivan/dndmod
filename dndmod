@@ -5,6 +5,7 @@
 #
 # Использование:
 #   dndmod                       включить режим
+#   dndmod --code                включить режим с набором кода из активной сессии Claude
 #   dndmod -w, --wallpaper FILE  запомнить картинку фона и включить режим
 #   dndmod --wallpaper-reset     вернуть обои рабочего стола как фон
 #   dndmod --palette [FILE]      показать палитру фона (или картинки FILE)
@@ -21,9 +22,16 @@ readonly WALLPAPER_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/dndmod/wallpaper"
 # Из TTY сессионная шина не задана — берём шину пользователя.
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
 
-# Вызывает метод расширения через D-Bus.
+# Вызывает метод расширения через D-Bus; остальные аргументы передаются методу.
 call() {
-    gdbus call --session --dest "$DEST" --object-path "$OBJ" --method "$IFACE.$1" >/dev/null
+    gdbus call --session --dest "$DEST" --object-path "$OBJ" --method "$IFACE.$1" "${@:2}" >/dev/null
+}
+
+# Режим с кодом; старый загрузчик (до перезахода в сессию) метода не знает.
+start_code() {
+    call StartWithOptions "['code']" 2>/dev/null && return
+    echo "Расширение ещё старой версии: перезайдите в сессию, чтобы работал --code." >&2
+    exit 1
 }
 
 # Проверяет, что файл существует и это изображение; печатает абсолютный путь.
@@ -54,12 +62,13 @@ show_palette() {
 }
 
 usage() {
-    echo "Использование: dndmod [-w|--wallpaper FILE | --wallpaper-reset | --palette [FILE] | --stop]" >&2
+    echo "Использование: dndmod [--code | -w|--wallpaper FILE | --wallpaper-reset | --palette [FILE] | --stop]" >&2
     exit 2
 }
 
 case "${1:-}" in
     "")                call Start ;;
+    --code)            [[ $# -eq 1 ]] || usage; start_code ;;
     -w|--wallpaper)    [[ $# -eq 2 ]] || usage; save_wallpaper "$2"; call Start ;;
     --wallpaper-reset) rm -f "$WALLPAPER_CONF" ;;
     --palette)         [[ $# -le 2 ]] || usage; shift; show_palette "$@" ;;
