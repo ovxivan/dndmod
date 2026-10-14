@@ -9,6 +9,8 @@
 #   dndmod -w, --wallpaper FILE  запомнить картинку фона и включить режим
 #   dndmod --wallpaper-reset     вернуть обои рабочего стола как фон
 #   dndmod --palette [FILE]      показать палитру фона (или картинки FILE)
+#   dndmod --hints on|off        показывать подсказку внизу экрана (по умолчанию off)
+#   dndmod --debug on|off        писать диагностику ввода в журнал (по умолчанию off)
 #   dndmod --stop                аварийно выключить (например, из TTY: Ctrl+Alt+F3)
 
 set -eu
@@ -17,7 +19,8 @@ readonly DEST="org.gnome.Shell"
 readonly OBJ="/org/gnome/Shell/Extensions/Dndmod"
 readonly IFACE="org.gnome.Shell.Extensions.Dndmod"
 readonly EXT_DIR="$HOME/.local/share/gnome-shell/extensions/dndmod@ovxivan"
-readonly WALLPAPER_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/dndmod/wallpaper"
+readonly CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/dndmod"
+readonly WALLPAPER_CONF="$CONFIG_DIR/wallpaper"
 
 # Из TTY сессионная шина не задана — берём шину пользователя.
 export DBUS_SESSION_BUS_ADDRESS="${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/user/$(id -u)/bus}"
@@ -61,8 +64,17 @@ show_palette() {
     fi
 }
 
+# Сохраняет настройку on|off в $CONFIG_DIR/<name>; расширение читает её при запуске.
+set_flag() {
+    local name=$1 value=${2:-}
+    [[ $value == on || $value == off ]] || usage
+    mkdir -p "$CONFIG_DIR"
+    printf '%s\n' "$value" > "$CONFIG_DIR/$name"
+}
+
 usage() {
-    echo "Использование: dndmod [--code | -w|--wallpaper FILE | --wallpaper-reset | --palette [FILE] | --stop]" >&2
+    echo "Использование: dndmod [--code | -w|--wallpaper FILE | --wallpaper-reset | --palette [FILE] |" >&2
+    echo "                       --hints on|off | --debug on|off | --stop]" >&2
     exit 2
 }
 
@@ -72,6 +84,7 @@ case "${1:-}" in
     -w|--wallpaper)    [[ $# -eq 2 ]] || usage; save_wallpaper "$2"; call Start ;;
     --wallpaper-reset) rm -f "$WALLPAPER_CONF" ;;
     --palette)         [[ $# -le 2 ]] || usage; shift; show_palette "$@" ;;
+    --hints|--debug)   [[ $# -eq 2 ]] || usage; set_flag "${1#--}" "$2" ;;
     --stop)            call Stop ;;
     *)                 usage ;;
 esac

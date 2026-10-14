@@ -27,6 +27,7 @@ const CODE_POLL_SEC = 2;
 const CODE_PAUSE_MS = 1500;
 const CODE_REPLAY_MS = 20000;
 const COMMENT_LINE = /^\s*(\/\/|#|\*|\/\*|--|;)/;
+const CONFIG_DIR = GLib.build_filenamev([GLib.get_user_config_dir(), 'dndmod']);
 const STATE_FILE = GLib.build_filenamev([GLib.get_user_state_dir(), 'dndmod', 'show-banners']);
 const HINT = 'Выход — пароль.  Аварийно: Ctrl+Alt+F3 → войти → dndmod --stop → Ctrl+Alt+F2';
 const GLYPHS = Array.from('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ@#$%&*+-=<>' +
@@ -330,6 +331,15 @@ class CodeTyper {
 }
 
 /**
+ * id текущей раскладки GNOME, например 'us'.
+ *
+ * @returns {string|undefined}
+ */
+function currentSourceId() {
+    return Keyboard.getInputSourceManager().currentSource?.id;
+}
+
+/**
  * Раскладка xkb по id среди текущих источников ввода GNOME.
  *
  * @param {string} id например 'us' или 'ru'
@@ -338,6 +348,21 @@ class CodeTyper {
 function findInputSource(id) {
     return Object.values(Keyboard.getInputSourceManager().inputSources)
         .find(source => source.type === 'xkb' && source.id === id);
+}
+
+/**
+ * Значение настройки из ~/.config/dndmod/<name> (пишет команда dndmod).
+ *
+ * @param {string} name например 'hints' или 'debug'
+ * @returns {string|null} содержимое файла или null, если настройки нет
+ */
+function readConfig(name) {
+    try {
+        const [, bytes] = GLib.file_get_contents(GLib.build_filenamev([CONFIG_DIR, name]));
+        return new TextDecoder().decode(bytes).trim();
+    } catch {
+        return null;
+    }
 }
 
 /**
@@ -407,6 +432,8 @@ export class Mode {
         this._notifications.set_boolean('show-banners', false);
         this._inhibitIdle();
         this._forceLatinLayout();
+        this._watchCapsLock();
+        this._debugLog(`start options=${JSON.stringify(options)} source=${currentSourceId()}`);
 
         this._timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, FRAME_MS, () => {
             this._rain.tick();
@@ -447,6 +474,11 @@ export class Mode {
         this._uninhibitIdle();
         this._restoreLayout();
 
+        if (this._capsSignal)
+            this._keymap.disconnect(this._capsSignal);
+        this._capsSignal = 0;
+        this._keymap = null;
+
         this._overlay.destroy();
         this._overlay = this._rain = null;
     }
@@ -483,6 +515,7 @@ export class Mode {
         this._overlay.add_child(area);
         this._palette = paletteFromImage(wallpaper);
         this._rain = new MatrixRain(area, this._palette);
+        this._debug = readConfig('debug') === 'on';
         this._hint = this._buildHint(this._palette[0]);
         this._overlay.add_child(this._hint);
 
@@ -555,7 +588,10 @@ export class Mode {
     }
 
     /**
-     * Неяркая подсказка про выход внизу основного монитора.
+     * Неяркая подсказка про выход внизу основного монитора и над ней —
+     * предупреждение о Caps Lock. Подсказка по умолчанию скрыта: включается
+     * dndmod --hints on или F1 в режиме. Предупреждение показывается всегда:
+     * оно нужно для ввода пароля.
      *
      * @param {import('./palette.js').PaletteColor} color основной цвет палитры
      * @returns {St.Widget}
@@ -570,21 +606,38 @@ export class Mode {
             width: monitor.width,
             height: monitor.height,
         });
-        box.add_child(new St.Label({
-            text: HINT,
+        const column = new St.BoxLayout({
+            vertical: true,
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.END,
             x_expand: true,
             y_expand: true,
-            style: `color: rgba(${rgb}, 0.45); background-color: rgba(0, 0, 0, 0.8);` +
-                'font-family: monospace; font-size: 10pt; padding: 4px 10px; margin-bottom: 12px;',
-        }));
+            style: 'spacing: 6px; margin-bottom: 12px;',
+        });
+        const label = 'font-family: monospace; font-size: 10pt; padding: 4px 10px;' +
+            'background-color: rgba(0, 0, 0, 0.8);';
+        this._capsLabel = new St.Label({
+            text: 'Caps Lock',
+            visible: false,
+            x_align: Clutter.ActorAlign.CENTER,
+            style: `${label} color: rgba(255, 200, 80, 0.85);`,
+        });
+        this._hintLabel = new St.Label({
+            text: HINT,
+            visible: readConfig('hints') === 'on',
+            x_align: Clutter.ActorAlign.CENTER,
+            style: `${label} color: rgba(${rgb}, 0.45);`,
+        });
+        column.add_child(this._capsLabel);
+        column.add_child(this._hintLabel);
+        box.add_child(column);
         return box;
     }
 
     /**
      * Невидимый ввод пароля: символы копятся в буфере и проверяются
-     * после каждого нажатия. Backspace — удалить символ, Escape — очистить.
+     * после каждого нажатия. Backspace — удалить символ, Escape — очистить,
+     * F1 — показать или спрятать подсказку.
      * Если с прошлого нажатия прошло больше INPUT_RESET_US, набранное
      * сбрасывается: время сравнивается напрямую, без таймера, который
      * в GLib срабатывает с опозданием до секунды.
@@ -594,11 +647,21 @@ export class Mode {
      */
     _onKey(event) {
         const now = GLib.get_monotonic_time();
-        if (now - (this._lastKeyAt ?? 0) > INPUT_RESET_US)
+        const reset = now - (this._lastKeyAt ?? 0) > INPUT_RESET_US;
+        if (reset)
             this._buffer = '';
         this._lastKeyAt = now;
+        if (this._debug) {
+            const ch = event.get_key_unicode();
+            this._debugLog(`key reset=${reset} printable=${!!ch && ch >= ' '} ` +
+                `ascii=${!!ch && ch >= ' ' && ch <= '~'} caps=${this._keymap?.get_caps_lock_state()} ` +
+                `source=${currentSourceId()} lenBefore=${this._buffer.length}`);
+        }
 
         switch (event.get_key_symbol()) {
+        case Clutter.KEY_F1:
+            this._hintLabel.visible = !this._hintLabel.visible;
+            return Clutter.EVENT_STOP;
         case Clutter.KEY_BackSpace:
             this._buffer = this._buffer.slice(0, -1);
             break;
@@ -633,6 +696,7 @@ export class Mode {
             if (!checked)
                 break;
             const ok = await this._checkPassword(checked).catch(() => false);
+            this._debugLog(`check ok=${ok} len=${checked.length}`);
             if (!this._overlay)
                 break;
             if (ok) {
@@ -672,6 +736,33 @@ export class Mode {
         } catch (e) {
             console.warn(`dndmod: save state failed: ${e.message}`);
         }
+    }
+
+    /**
+     * Показывает предупреждение, пока включён Caps Lock: пароль набирается
+     * вслепую, и заглавные буквы вместо строчных иначе не заметить.
+     *
+     * @returns {void}
+     */
+    _watchCapsLock() {
+        this._keymap = Clutter.get_default_backend().get_default_seat().get_keymap();
+        const update = () => {
+            this._capsLabel.visible = this._keymap.get_caps_lock_state();
+        };
+        this._capsSignal = this._keymap.connect('state-changed', update);
+        update();
+    }
+
+    /**
+     * Пишет в журнал, если включена диагностика (dndmod --debug on).
+     * Набранные символы не пишутся — только их признаки.
+     *
+     * @param {string} message
+     * @returns {void}
+     */
+    _debugLog(message) {
+        if (this._debug)
+            console.log(`dndmod-debug: ${message}`);
     }
 
     /**
