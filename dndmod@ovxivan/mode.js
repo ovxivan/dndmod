@@ -21,6 +21,9 @@ const WALLPAPER_DIM = 0.55;
 const INPUT_RESET_US = 2 * GLib.USEC_PER_SEC;
 const IDLE_INHIBIT_FLAG = 8;
 const LATIN_LAYOUT = 'us';
+const LAYOUT_SWITCH_BINDINGS = ['switch-input-source', 'switch-input-source-backward'];
+const SHORTCUT_MODIFIERS = Clutter.ModifierType.SUPER_MASK | Clutter.ModifierType.MOD4_MASK |
+    Clutter.ModifierType.CONTROL_MASK;
 const CODE_FONT_SIZE = 15;
 const CODE_FRAME_SHARE = 0.7;
 const CODE_RAIN_INTENSITY = 0.35;
@@ -437,6 +440,7 @@ export class Mode {
         this._forceLatinLayout();
         this._watchCapsLock();
         this._hidePointer();
+        this._blockLayoutSwitch();
         this._debugLog(`start options=${JSON.stringify(options)} source=${currentSourceId()}`);
 
         if (!black) {
@@ -478,6 +482,7 @@ export class Mode {
         }
         this._notifications = null;
         this._uninhibitIdle();
+        this._restoreLayoutSwitch();
         this._restoreLayout();
 
         this._restorePointer();
@@ -669,6 +674,10 @@ export class Mode {
                 `ascii=${!!ch && ch >= ' ' && ch <= '~'} caps=${this._keymap?.get_caps_lock_state()} ` +
                 `source=${currentSourceId()} lenBefore=${this._buffer.length}`);
         }
+
+        // Сочетания с Super/Ctrl (например, Super+Space) — не часть пароля.
+        if (event.get_state() & SHORTCUT_MODIFIERS)
+            return Clutter.EVENT_STOP;
 
         switch (event.get_key_symbol()) {
         case Clutter.KEY_F1:
@@ -898,5 +907,32 @@ export class Mode {
             'Uninhibit', new GLib.Variant('(u)', [this._cookie]),
             null, Gio.DBusCallFlags.NONE, -1, null, null);
         this._cookie = 0;
+    }
+
+    /**
+     * Запрещает Super+Space и другие сочетания смены раскладки: GNOME
+     * разрешает их даже на экране блокировки, и во время режима всплывало
+     * окно выбора языка. Пока режим включён, сочетания работают только
+     * в обычном режиме рабочего стола, то есть никогда.
+     *
+     * @returns {void}
+     */
+    _blockLayoutSwitch() {
+        this._prevBindingModes = {};
+        for (const name of LAYOUT_SWITCH_BINDINGS) {
+            this._prevBindingModes[name] = Main.wm._allowedKeybindings[name] ?? Shell.ActionMode.ALL;
+            Main.wm.allowKeybinding(name, Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW);
+        }
+    }
+
+    /**
+     * Возвращает сочетаниям смены раскладки прежние режимы.
+     *
+     * @returns {void}
+     */
+    _restoreLayoutSwitch() {
+        for (const [name, modes] of Object.entries(this._prevBindingModes ?? {}))
+            Main.wm.allowKeybinding(name, modes);
+        this._prevBindingModes = null;
     }
 }
